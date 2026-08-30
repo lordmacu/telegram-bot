@@ -1,0 +1,12 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      APP_VERSION: ${APP_VERSION:-2.9.7}
+    volumes:
+      - bot_data:/app/data
+
+volumes:
+  bot_data:
