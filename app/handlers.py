@@ -118,49 +118,76 @@ async def on_route_selected(callback: CallbackQuery) -> None:
     idx = int(callback.data.split(":", 1)[1])
     rutas = session.get("rutas") or []
     estacion = session.get("estacion")
+    es_troncal = session.get("es_troncal", True)
+
     if idx >= len(rutas) or not estacion:
         await callback.answer("Esa opción ya expiró, buscá de nuevo.", show_alert=True)
         return
     await callback.answer()
 
     ruta = rutas[idx]
-    try:
-        buses = await tm_client.get_bus_brt_time(
-            estacion.get("codigo"), ruta.get("codigo"), ruta.get("id"), ruta.get("nombre")
-        )
-    except Exception:
-        log.exception("Fallo consultando getServicios")
-        buses = []
-
     alerta_ctx = {
         "paradero": estacion.get("codigo"),
         "estacion_nombre": estacion.get("nombre") or "",
         "ruta_codigo": ruta.get("codigo"),
         "id_ruta": ruta.get("id"),
         "nombre_ruta": ruta.get("nombre") or "",
-        "es_troncal": True,
+        "es_troncal": es_troncal,
     }
     session["alerta"] = alerta_ctx
 
-    if buses:
+    if es_troncal:
+        try:
+            buses = await tm_client.get_bus_brt_time(
+                estacion.get("codigo"), ruta.get("codigo"), ruta.get("id"), ruta.get("nombre")
+            )
+        except Exception:
+            log.exception("Fallo consultando getServicios")
+            buses = []
+
+        if buses:
+            await callback.message.answer(
+                formatting.format_bus_brt_times(estacion.get("nombre") or "", ruta.get("nombre") or "", buses),
+                reply_markup=_AVISAR_KB,
+            )
+            return
+
+        try:
+            programacion = await tm_client.get_programacion(
+                estacion.get("codigo"), ruta.get("codigo"), ruta.get("id"), ruta.get("nombre")
+            )
+        except Exception:
+            log.exception("Fallo consultando consultar_programacion")
+            programacion = []
+
         await callback.message.answer(
-            formatting.format_bus_brt_times(estacion.get("nombre") or "", ruta.get("nombre") or "", buses),
+            formatting.format_programacion(estacion.get("nombre") or "", ruta.get("nombre") or "", programacion),
             reply_markup=_AVISAR_KB,
         )
-        return
 
-    try:
-        programacion = await tm_client.get_programacion(
-            estacion.get("codigo"), ruta.get("codigo"), ruta.get("id"), ruta.get("nombre")
+    else:
+        # Zonal: getLlegadas y filtrar por ruta
+        try:
+            llegadas = await tm_client.get_llegadas(estacion.get("codigo"))
+        except Exception:
+            log.exception("Fallo consultando llegadas zonales")
+            await callback.message.answer("No pude consultar las llegadas, intentá de nuevo en un momento.")
+            return
+
+        ruta_nombre = ruta.get("nombre") or ruta.get("codigo") or ""
+        filtradas = [
+            l for l in llegadas
+            if ruta_nombre and (
+                ruta_nombre in (l.get("ruta_extraida") or "")
+                or ruta_nombre in (l.get("ruta_sae") or "")
+                or (l.get("ruta_extraida") or "") in ruta_nombre
+            )
+        ] or llegadas  # si no filtra nada, mostrar todas
+
+        await callback.message.answer(
+            formatting.format_llegadas(estacion.get("nombre") or "", filtradas),
+            reply_markup=_AVISAR_KB,
         )
-    except Exception:
-        log.exception("Fallo consultando consultar_programacion")
-        programacion = []
-
-    await callback.message.answer(
-        formatting.format_programacion(estacion.get("nombre") or "", ruta.get("nombre") or "", programacion),
-        reply_markup=_AVISAR_KB,
-    )
 
 
 @router.callback_query(F.data == "av")
@@ -168,12 +195,13 @@ async def on_avisar(callback: CallbackQuery) -> None:
     session = SESSIONS.get(callback.message.chat.id, {})
     ctx = session.get("alerta")
     if not ctx:
-        await callback.answer("Ya no tengo el contexto de esta consulta, buscá de nuevo.", show_alert=True)
+        await callback.answer("Ya no tengo el contexto, buscá de nuevo.", show_alert=True)
         return
     alerts.set_alert(callback.message.chat.id, ctx)
     await callback.answer()
     await callback.message.answer(
-        f"🔔 Te voy a avisar cada 5 min sobre *{ctx['nombre_ruta']}* en *{ctx['estacion_nombre']}*.\n"
+        f"🔔 Te voy a avisar cada 5 min sobre *{ctx['nombre_ruta'] or 'este paradero'}* "
+        f"en *{ctx['estacion_nombre']}*.\n"
         "Usá /cancelar para detener los avisos."
     )
 
@@ -181,41 +209,25 @@ async def on_avisar(callback: CallbackQuery) -> None:
 async def _resolve_station(message: Message, station: dict, session: dict | None = None) -> None:
     chat_id = message.chat.id
     session = session if session is not None else SESSIONS.setdefault(chat_id, {})
+    es_troncal = stations.es_troncal(station)
 
-    if stations.es_troncal(station):
-        try:
-            rutas = await tm_client.get_rutas_de_estacion(station.get("codigo"), es_troncal=True)
-        except Exception:
-            log.exception("Fallo consultando rutas de estación troncal")
-            await message.answer("No pude consultar las rutas de esta estación, intentá de nuevo en un momento.")
-            return
-        if not rutas:
-            await message.answer(f"No hay rutas registradas para *{station.get('nombre')}* en este momento.")
-            return
-        session["rutas"] = rutas
-        session["estacion"] = station
-        await message.answer(
-            f"🚏 *{station.get('nombre')}* — elegí una ruta:", reply_markup=_rutas_keyboard(rutas)
-        )
-    else:
-        try:
-            llegadas = await tm_client.get_llegadas(station.get("codigo"))
-        except Exception:
-            log.exception("Fallo consultando llegadas zonales")
-            await message.answer("No pude consultar las llegadas de este paradero, intentá de nuevo en un momento.")
-            return
+    try:
+        rutas = await tm_client.get_rutas_de_estacion(station.get("codigo"), es_troncal=es_troncal)
+    except Exception:
+        log.exception("Fallo consultando rutas de estación")
+        await message.answer("No pude consultar las rutas de esta estación, intentá de nuevo en un momento.")
+        return
 
-        alerta_ctx = {
-            "paradero": station.get("codigo"),
-            "estacion_nombre": station.get("nombre") or "",
-            "ruta_codigo": None,
-            "id_ruta": None,
-            "nombre_ruta": None,
-            "es_troncal": False,
-        }
-        session["alerta"] = alerta_ctx
+    if not rutas:
+        await message.answer(f"No hay rutas registradas para *{station.get('nombre')}* en este momento.")
+        return
 
-        await message.answer(
-            formatting.format_llegadas(station.get("nombre") or "", llegadas),
-            reply_markup=_AVISAR_KB,
-        )
+    session["rutas"] = rutas
+    session["estacion"] = station
+    session["es_troncal"] = es_troncal
+
+    tipo = "troncal" if es_troncal else "zonal"
+    await message.answer(
+        f"🚏 *{station.get('nombre')}* ({tipo}) — elegí una ruta:",
+        reply_markup=_rutas_keyboard(rutas),
+    )
