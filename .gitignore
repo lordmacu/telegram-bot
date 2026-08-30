@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .env
 data/
+
+# Script de investigación con credenciales/token de una instalación Firebase
+# reverse-engineered del APK; no es parte del bot y no debe publicarse.
+fetch_remote_config.sh
