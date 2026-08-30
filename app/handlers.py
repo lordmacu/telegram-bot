@@ -211,23 +211,67 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
     session = session if session is not None else SESSIONS.setdefault(chat_id, {})
     es_troncal = stations.es_troncal(station)
 
-    try:
-        rutas = await tm_client.get_rutas_de_estacion(station.get("codigo"), es_troncal=es_troncal)
-    except Exception:
-        log.exception("Fallo consultando rutas de estación")
-        await message.answer("No pude consultar las rutas de esta estación, intentá de nuevo en un momento.")
-        return
+    if es_troncal:
+        try:
+            rutas = await tm_client.get_rutas_de_estacion(station.get("codigo"), es_troncal=True)
+        except Exception:
+            log.exception("Fallo consultando rutas de estación troncal")
+            await message.answer("No pude consultar las rutas de esta estación, intentá de nuevo en un momento.")
+            return
+        if not rutas:
+            await message.answer(f"No hay rutas registradas para *{station.get('nombre')}* en este momento.")
+            return
+        session["rutas"] = rutas
+        session["estacion"] = station
+        session["es_troncal"] = True
+        session["llegadas_cache"] = None
+        await message.answer(
+            f"🚏 *{station.get('nombre')}* — elegí una ruta:",
+            reply_markup=_rutas_keyboard(rutas),
+        )
+    else:
+        # Zonal: obtener llegadas en tiempo real y extraer rutas de ahí
+        try:
+            llegadas = await tm_client.get_llegadas(station.get("codigo"))
+        except Exception:
+            log.exception("Fallo consultando llegadas zonales")
+            await message.answer("No pude consultar las llegadas de este paradero, intentá de nuevo en un momento.")
+            return
 
-    if not rutas:
-        await message.answer(f"No hay rutas registradas para *{station.get('nombre')}* en este momento.")
-        return
+        if not llegadas:
+            await message.answer(f"No hay buses llegando a *{station.get('nombre')}* en este momento.")
+            return
 
-    session["rutas"] = rutas
-    session["estacion"] = station
-    session["es_troncal"] = es_troncal
+        # Extraer rutas únicas de las llegadas
+        seen: set = set()
+        rutas = []
+        for l in llegadas:
+            nombre = l.get("ruta_extraida") or l.get("ruta_sae") or ""
+            if nombre and nombre not in seen:
+                seen.add(nombre)
+                rutas.append({"nombre": nombre, "codigo": nombre, "id": nombre})
 
-    tipo = "troncal" if es_troncal else "zonal"
-    await message.answer(
-        f"🚏 *{station.get('nombre')}* ({tipo}) — elegí una ruta:",
-        reply_markup=_rutas_keyboard(rutas),
-    )
+        session["rutas"] = rutas
+        session["estacion"] = station
+        session["es_troncal"] = False
+        session["llegadas_cache"] = llegadas  # reusar sin otra llamada a la API
+
+        if len(rutas) == 1:
+            # Una sola ruta — ir directo a mostrar llegadas
+            session["alerta"] = {
+                "paradero": station.get("codigo"),
+                "estacion_nombre": station.get("nombre") or "",
+                "ruta_codigo": rutas[0]["codigo"],
+                "id_ruta": rutas[0]["id"],
+                "nombre_ruta": rutas[0]["nombre"],
+                "es_troncal": False,
+            }
+            await message.answer(
+                formatting.format_llegadas(station.get("nombre") or "", llegadas),
+                reply_markup=_AVISAR_KB,
+            )
+        else:
+            await message.answer(
+                f"🚏 *{station.get('nombre')}* — elegí una ruta:",
+                reply_markup=_rutas_keyboard(rutas),
+            )

@@ -58,8 +58,18 @@ async def alert_loop(bot) -> None:
                     )
                 else:
                     llegadas = await tm_client.get_llegadas(ctx["paradero"])
+                    ruta_nombre = ctx.get("nombre_ruta") or ""
+                    if ruta_nombre:
+                        filtradas = [
+                            l for l in llegadas
+                            if ruta_nombre in (l.get("ruta_extraida") or "")
+                            or ruta_nombre in (l.get("ruta_sae") or "")
+                            or (l.get("ruta_extraida") or "") in ruta_nombre
+                        ] or llegadas
+                    else:
+                        filtradas = llegadas
                     text = "🔔 *Actualización cada 5 min:*\n\n" + formatting.format_llegadas(
-                        ctx["estacion_nombre"], llegadas
+                        ctx["estacion_nombre"], filtradas
                     )
                 await bot.send_message(chat_id, text)
             except Exception:
