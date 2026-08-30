@@ -1,3 +1,10 @@
+def _tiempo_label(tiempo: str) -> str:
+    t = tiempo.strip().lower()
+    if t in ("ahora", "llegando", "en estación"):
+        return f"🟢 ¡Llegando ahora!"
+    return f"🕐 Llega en {tiempo}"
+
+
 def format_llegadas(estacion_nombre: str, llegadas: list[dict]) -> str:
     if not llegadas:
         return f"No hay buses reportados en este momento para *{estacion_nombre}*."
@@ -9,7 +16,7 @@ def format_llegadas(estacion_nombre: str, llegadas: list[dict]) -> str:
         distancia = item.get("distancia") or ""
         extras = f"  ·  📏 {distancia}" if distancia else ""
         lines.append(f"🚌 *{ruta}*  {destino}")
-        lines.append(f"⏱  {tiempo}{extras}")
+        lines.append(f"{_tiempo_label(tiempo)}{extras}")
         lines.append("")
     if lines and lines[-1] == "":
         lines.pop()
@@ -33,7 +40,7 @@ def format_bus_brt_times(estacion_nombre: str, ruta_nombre: str, buses: list[dic
         if accesible:
             extras.append("♿")
         suffix = "  ·  " + "  ·  ".join(extras) if extras else ""
-        lines.append(f"⏱  {tiempo}{suffix}")
+        lines.append(f"{_tiempo_label(tiempo)}{suffix}")
     return "\n".join(lines)
 
 
