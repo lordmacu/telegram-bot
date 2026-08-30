@@ -62,9 +62,9 @@ async def alert_loop(bot) -> None:
                     if ruta_nombre:
                         filtradas = [
                             l for l in llegadas
-                            if ruta_nombre in (l.get("ruta_extraida") or "")
-                            or ruta_nombre in (l.get("ruta_sae") or "")
-                            or (l.get("ruta_extraida") or "") in ruta_nombre
+                            if ruta_nombre in str(l.get("ruta_extraida") or "")
+                            or ruta_nombre in str(l.get("ruta_sae") or "")
+                            or str(l.get("ruta_extraida") or "") in ruta_nombre
                         ] or llegadas
                     else:
                         filtradas = llegadas

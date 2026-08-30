@@ -178,9 +178,9 @@ async def on_route_selected(callback: CallbackQuery) -> None:
         filtradas = [
             l for l in llegadas
             if ruta_nombre and (
-                ruta_nombre in (l.get("ruta_extraida") or "")
-                or ruta_nombre in (l.get("ruta_sae") or "")
-                or (l.get("ruta_extraida") or "") in ruta_nombre
+                ruta_nombre in str(l.get("ruta_extraida") or "")
+                or ruta_nombre in str(l.get("ruta_sae") or "")
+                or str(l.get("ruta_extraida") or "") in ruta_nombre
             )
         ] or llegadas  # si no filtra nada, mostrar todas
 
@@ -253,7 +253,7 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
         seen: set = set()
         rutas = []
         for l in llegadas:
-            nombre = l.get("ruta_extraida") or l.get("ruta_sae") or ""
+            nombre = str(l.get("ruta_extraida") or l.get("ruta_sae") or "")
             if nombre and nombre not in seen:
                 seen.add(nombre)
                 rutas.append({"nombre": nombre, "codigo": nombre, "id": nombre})
