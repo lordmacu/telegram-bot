@@ -211,25 +211,32 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
     session = session if session is not None else SESSIONS.setdefault(chat_id, {})
     es_troncal = stations.es_troncal(station)
 
+    log.info("_resolve_station: codigo=%s nombre=%s es_troncal=%s", station.get("codigo"), station.get("nombre"), es_troncal)
+
     if es_troncal:
         try:
             rutas = await tm_client.get_rutas_de_estacion(station.get("codigo"), es_troncal=True)
+            log.info("rutas troncal para %s: %s", station.get("codigo"), rutas)
         except Exception:
-            log.exception("Fallo consultando rutas de estación troncal")
-            await message.answer("No pude consultar las rutas de esta estación, intentá de nuevo en un momento.")
+            log.exception("Fallo consultando rutas de estación troncal %s", station.get("codigo"))
+            rutas = []
+
+        if rutas:
+            session["rutas"] = rutas
+            session["estacion"] = station
+            session["es_troncal"] = True
+            session["llegadas_cache"] = None
+            await message.answer(
+                f"🚏 *{station.get('nombre')}* — elegí una ruta:",
+                reply_markup=_rutas_keyboard(rutas),
+            )
             return
-        if not rutas:
-            await message.answer(f"No hay rutas registradas para *{station.get('nombre')}* en este momento.")
-            return
-        session["rutas"] = rutas
-        session["estacion"] = station
-        session["es_troncal"] = True
-        session["llegadas_cache"] = None
-        await message.answer(
-            f"🚏 *{station.get('nombre')}* — elegí una ruta:",
-            reply_markup=_rutas_keyboard(rutas),
-        )
-    else:
+
+        # Fallback: intentar como zonal (getLlegadas)
+        log.info("Sin rutas troncal para %s, intentando getLlegadas como fallback", station.get("codigo"))
+        es_troncal = False  # degradar a zonal para el resto del flujo
+
+    if not es_troncal:
         # Zonal: obtener llegadas en tiempo real y extraer rutas de ahí
         try:
             llegadas = await tm_client.get_llegadas(station.get("codigo"))

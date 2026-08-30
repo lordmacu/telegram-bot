@@ -1,8 +1,11 @@
+import logging
+
 import httpx
 
 from . import config
 
 _client: httpx.AsyncClient | None = None
+log = logging.getLogger(__name__)
 
 
 async def _get_client() -> httpx.AsyncClient:
@@ -42,7 +45,10 @@ async def get_rutas_de_estacion(estacion_codigo: str, es_troncal: bool) -> list[
     client = await _get_client()
     r = await client.get(f"{config.RUTAS_BASE}/loader.php", params=params, headers=_rutas_headers())
     r.raise_for_status()
-    return r.json().get("lista_rutas") or []
+    data = r.json()
+    rutas = data.get("lista_rutas") or []
+    log.info("get_rutas_de_estacion(%s, troncal=%s) → %d rutas | raw keys: %s", estacion_codigo, es_troncal, len(rutas), list(data.keys()))
+    return rutas
 
 
 async def get_llegadas(paradero_codigo: str) -> list[dict]:
@@ -54,7 +60,9 @@ async def get_llegadas(paradero_codigo: str) -> list[dict]:
         headers=_bodega_headers(),
     )
     r.raise_for_status()
-    return r.json() or []
+    data = r.json() or []
+    log.info("get_llegadas(%s) → %d items", paradero_codigo, len(data))
+    return data
 
 
 async def get_bus_brt_time(
