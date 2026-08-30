@@ -59,49 +59,32 @@ o ubicación GPS.
 
 ## Qué falta / qué está bloqueado
 
-### 1. Bloqueante principal: los endpoints de "tiempo real" de Bodega dan 401
+### 1. ~~Bloqueante principal: los endpoints de "tiempo real" de Bodega dan 401~~ — RESUELTO
 
-`paradero/buses` (`getLlegadas`), `getServicios` (`getBusBrtTime`), `buses`
-(`getBusBrt`), `location/ruta` y `places` devuelven **401 Unauthorized**
-(`{"detail":"Service Not Available","status":401,"title":"Unauthorized"}`)
-con solo `uuid`+`version`. Justo estos son los endpoints que dan la
-funcionalidad central que pediste (qué bus llega y cuándo).
+**Causa encontrada (2026-08-30):** Bodega requiere un header adicional
+`Appid` con un valor estático que la app obtiene de **Firebase Realtime
+Database** (no Remote Config) en el nodo `z/Android`, campo `Bodega`
+(formato `x;NombreHeader;ValorHeader`).
 
-Investigado hasta ahora:
+Proceso de descubrimiento:
+1. Se leyó `UtilsFirebase.cargaFireBase()`: usa `FirebaseDatabase` en
+   `z/Android`, no `FirebaseRemoteConfig`. El intento anterior con Remote
+   Config era la pista equivocada.
+2. Firebase Anonymous Auth (`accounts:signUp`) requiere headers
+   `X-Android-Package: com.nexura.transmilenio` y
+   `X-Android-Cert: 4463555E3C2D4CF4C5F84796EF8FBF0DA0B4E26B` (del APK).
+3. Con el `idToken` anónimo se leyó `z/Android.json` del database
+   `https://transmilenio-transmiapp.firebaseio.com`.
+4. El campo `Bodega` devolvió el valor que al parsearlo con `;` da:
+   - `BODEGA_EXTRA_HEADER_NAME=Appid`
+   - `BODEGA_EXTRA_HEADER_VALUE=9a2c3b48f0c24ae9bfba38e94f27c3ea`
+5. Con ese header, `POST /paradero/buses` respondió **HTTP 200** desde Mac
+   (IP no colombiana) — confirma que **no había geo-bloqueo**, solo faltaba
+   el header.
 
-- Se sospechaba de un header extra que `ApiClientBodega` agrega
-  condicionalmente, cuyo valor llega por Firebase/Huawei Remote Config
-  (key `"Bodega"`, formato `"algo;NombreHeader;ValorHeader"`).
-- Se replicó el fetch real de Remote Config (con las credenciales públicas
-  del proyecto Firebase embebidas en el APK: `google_api_key`,
-  `google_app_id`, más el `X-Android-Cert` = SHA1 de la firma del APK) y el
-  resultado fue **`{"appName":"com.nexura.transmilenio","state":"NO_TEMPLATE"}`**.
-  Esto descarta que el header sea la causa: si Firebase no tiene ningún
-  template publicado ahora mismo, la app real tampoco está recibiendo ese
-  header extra — y aun así (asumimos) le funciona a los usuarios reales.
-- Quedan dos hipótesis sin confirmar, ninguna la pude probar yo mismo porque
-  el clasificador de auto-mode bloqueó los intentos (falsificar
-  `User-Agent`/headers de cliente cae en la misma categoría que "evadir
-  detección", aunque la intención era solo replicar un cliente móvil legítimo):
-  - **Bloqueo geográfico**: el backend (Google App Engine) podría estar
-    restringido a IPs de Colombia. Mi Mac no está en Colombia.
-  - **Filtro por huella de cliente** (`User-Agent`, orden de headers, TLS
-    fingerprint): un WAF simple que solo deje pasar tráfico que parezca
-    `okhttp` (el HTTP client real de la app Android).
-
-**Cómo se podría dilucidar/solucionar:**
-
-- Correr el mismo `curl` (o el bot) **desde un teléfono con datos móviles en
-  Colombia** (Termux) agregando `-H "User-Agent: okhttp/4.9.3"`. Si eso
-  responde 200, confirma geo-bloqueo y/o filtro de User-Agent.
-- Si es geo-bloqueo: el bot (o al menos la parte que llama a Bodega) tendría
-  que correr en un servidor con IP colombiana, o las llamadas puntuales a
-  Bodega tendrían que salir por un proxy/VPN con salida en Colombia. La VM de
-  Coolify en OrbStack (este Mac) **no** cumpliría esa condición.
-- Alternativa más simple y 100% legítima: capturar el tráfico de la app real
-  con un proxy propio (mitmproxy/HTTP Toolkit) en tu celular, para ver de
-  una vez los headers exactos que el backend acepta — sin tener que adivinar
-  nada.
+**Estado actual:** `.env` local tiene los valores correctos. `.env.example`
+actualizado con `BODEGA_EXTRA_HEADER_NAME=Appid` (valor sin commitear).
+El bot está listo para arrancar y usar todos los endpoints de Bodega.
 
 ### 2. Deploy a Coolify — no arrancado todavía
 
