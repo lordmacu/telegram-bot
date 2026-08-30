@@ -109,6 +109,7 @@ async def on_station_selected(callback: CallbackQuery) -> None:
         await callback.answer("Esa opción ya expiró, buscá de nuevo.", show_alert=True)
         return
     await callback.answer()
+    await callback.bot.send_chat_action(callback.message.chat.id, "typing")
     await _resolve_station(callback.message, matches[idx], session=session)
 
 
@@ -124,6 +125,7 @@ async def on_route_selected(callback: CallbackQuery) -> None:
         await callback.answer("Esa opción ya expiró, buscá de nuevo.", show_alert=True)
         return
     await callback.answer()
+    await callback.bot.send_chat_action(callback.message.chat.id, "typing")
 
     ruta = rutas[idx]
     alerta_ctx = {
