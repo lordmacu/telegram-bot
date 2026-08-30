@@ -4,14 +4,16 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from . import formatting, stations, tm_client
+from . import alerts, formatting, stations, tm_client
 
 router = Router()
 log = logging.getLogger(__name__)
 
-# Estado efímero en memoria por chat: última búsqueda de estaciones/rutas,
-# para poder resolver los callback_data cortos ("st:<idx>", "rt:<idx>").
 SESSIONS: dict[int, dict] = {}
+
+_AVISAR_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🔔 Avisar cada 5 min", callback_data="av")]
+])
 
 
 def _station_button_text(s: dict) -> str:
@@ -43,7 +45,8 @@ async def cmd_start(message: Message) -> None:
         "🚌 *Bot de llegadas TransMilenio/SITP*\n\n"
         "Enviame el nombre de una estación o paradero (ej. `Portal Norte`), "
         "un código exacto con `/codigo <código>`, o compartí tu ubicación 📍 "
-        "para ver los paraderos más cercanos."
+        "para ver los paraderos más cercanos.\n\n"
+        "Usa /cancelar para detener los avisos automáticos."
     )
 
 
@@ -59,6 +62,14 @@ async def cmd_codigo(message: Message) -> None:
         await message.answer("No encontré ninguna estación/paradero con ese código.")
         return
     await _resolve_station(message, match)
+
+
+@router.message(Command("cancelar"))
+async def cmd_cancelar(message: Message) -> None:
+    if alerts.clear_alert(message.chat.id):
+        await message.answer("✅ Avisos cancelados.")
+    else:
+        await message.answer("No tenías ningún aviso activo.")
 
 
 @router.message(F.location)
@@ -121,9 +132,20 @@ async def on_route_selected(callback: CallbackQuery) -> None:
         log.exception("Fallo consultando getServicios")
         buses = []
 
+    alerta_ctx = {
+        "paradero": estacion.get("codigo"),
+        "estacion_nombre": estacion.get("nombre") or "",
+        "ruta_codigo": ruta.get("codigo"),
+        "id_ruta": ruta.get("id"),
+        "nombre_ruta": ruta.get("nombre") or "",
+        "es_troncal": True,
+    }
+    session["alerta"] = alerta_ctx
+
     if buses:
         await callback.message.answer(
-            formatting.format_bus_brt_times(estacion.get("nombre") or "", ruta.get("nombre") or "", buses)
+            formatting.format_bus_brt_times(estacion.get("nombre") or "", ruta.get("nombre") or "", buses),
+            reply_markup=_AVISAR_KB,
         )
         return
 
@@ -136,7 +158,23 @@ async def on_route_selected(callback: CallbackQuery) -> None:
         programacion = []
 
     await callback.message.answer(
-        formatting.format_programacion(estacion.get("nombre") or "", ruta.get("nombre") or "", programacion)
+        formatting.format_programacion(estacion.get("nombre") or "", ruta.get("nombre") or "", programacion),
+        reply_markup=_AVISAR_KB,
+    )
+
+
+@router.callback_query(F.data == "av")
+async def on_avisar(callback: CallbackQuery) -> None:
+    session = SESSIONS.get(callback.message.chat.id, {})
+    ctx = session.get("alerta")
+    if not ctx:
+        await callback.answer("Ya no tengo el contexto de esta consulta, buscá de nuevo.", show_alert=True)
+        return
+    alerts.set_alert(callback.message.chat.id, ctx)
+    await callback.answer()
+    await callback.message.answer(
+        f"🔔 Te voy a avisar cada 5 min sobre *{ctx['nombre_ruta']}* en *{ctx['estacion_nombre']}*.\n"
+        "Usá /cancelar para detener los avisos."
     )
 
 
@@ -166,4 +204,18 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
             log.exception("Fallo consultando llegadas zonales")
             await message.answer("No pude consultar las llegadas de este paradero, intentá de nuevo en un momento.")
             return
-        await message.answer(formatting.format_llegadas(station.get("nombre") or "", llegadas))
+
+        alerta_ctx = {
+            "paradero": station.get("codigo"),
+            "estacion_nombre": station.get("nombre") or "",
+            "ruta_codigo": None,
+            "id_ruta": None,
+            "nombre_ruta": None,
+            "es_troncal": False,
+        }
+        session["alerta"] = alerta_ctx
+
+        await message.answer(
+            formatting.format_llegadas(station.get("nombre") or "", llegadas),
+            reply_markup=_AVISAR_KB,
+        )
