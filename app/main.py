@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import alerts, config, stations
+from . import alerts, config, stations, subscriptions
 from .handlers import router
 
 
@@ -23,6 +23,7 @@ async def main() -> None:
         logging.exception("No se pudo precargar el cache de estaciones al inicio, se reintentará on-demand")
 
     asyncio.create_task(alerts.alert_loop(bot))
+    asyncio.create_task(subscriptions.subscription_loop(bot))
     await dp.start_polling(bot)
 
 

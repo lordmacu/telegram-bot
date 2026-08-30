@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from . import alerts, formatting, stations, tm_client
+from . import alerts, formatting, stations, subscriptions, tm_client
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -12,8 +12,17 @@ log = logging.getLogger(__name__)
 SESSIONS: dict[int, dict] = {}
 
 _AVISAR_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="🔔 Avisar cada 5 min", callback_data="av")]
+    [InlineKeyboardButton(text="🔔 Avisar cada 5 min", callback_data="av")],
+    [InlineKeyboardButton(text="📅 Suscribir diario", callback_data="sb")],
 ])
+
+
+def _horas_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=h, callback_data=f"sbt:{h}") for h in fila]
+        for fila in subscriptions.HORAS_DISPONIBLES
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _station_button_text(s: dict) -> str:
@@ -46,7 +55,8 @@ async def cmd_start(message: Message) -> None:
         "Enviame el nombre de una estación o paradero (ej. `Portal Norte`), "
         "un código exacto con `/codigo <código>`, o compartí tu ubicación 📍 "
         "para ver los paraderos más cercanos.\n\n"
-        "Usa /cancelar para detener los avisos automáticos."
+        "/cancelar — detener avisos de 5 min\n"
+        "/desuscribir — cancelar suscripción diaria"
     )
 
 
@@ -67,9 +77,17 @@ async def cmd_codigo(message: Message) -> None:
 @router.message(Command("cancelar"))
 async def cmd_cancelar(message: Message) -> None:
     if alerts.clear_alert(message.chat.id):
-        await message.answer("✅ Avisos cancelados.")
+        await message.answer("✅ Avisos de 5 min cancelados.")
     else:
-        await message.answer("No tenías ningún aviso activo.")
+        await message.answer("No tenías ningún aviso de 5 min activo.")
+
+
+@router.message(Command("desuscribir"))
+async def cmd_desuscribir(message: Message) -> None:
+    if subscriptions.clear_subscription(message.chat.id):
+        await message.answer("✅ Suscripción diaria cancelada.")
+    else:
+        await message.answer("No tenías ninguna suscripción diaria activa.")
 
 
 @router.message(F.location)
@@ -205,6 +223,47 @@ async def on_avisar(callback: CallbackQuery) -> None:
         f"🔔 Te voy a avisar cada 5 min sobre *{ctx['nombre_ruta'] or 'este paradero'}* "
         f"en *{ctx['estacion_nombre']}*.\n"
         "Usá /cancelar para detener los avisos."
+    )
+
+
+@router.callback_query(F.data == "sb")
+async def on_suscribir(callback: CallbackQuery) -> None:
+    session = SESSIONS.get(callback.message.chat.id, {})
+    ctx = session.get("alerta")
+    if not ctx:
+        await callback.answer("Ya no tengo el contexto, buscá de nuevo.", show_alert=True)
+        return
+    await callback.answer()
+    sub_activa = subscriptions.get_subscription(callback.message.chat.id)
+    aviso = ""
+    if sub_activa:
+        aviso = f"_(ya tenés una suscripción a las {sub_activa.get('hora')}, se reemplazará)_\n\n"
+    await callback.message.answer(
+        f"📅 *Suscripción diaria*\n\n"
+        f"{aviso}"
+        f"¿A qué hora querés recibir el estado de *{ctx.get('nombre_ruta') or 'este paradero'}* "
+        f"en *{ctx.get('estacion_nombre')}* todos los días?",
+        reply_markup=_horas_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("sbt:"))
+async def on_hora_seleccionada(callback: CallbackQuery) -> None:
+    hora = callback.data.split(":", 1)[1]
+    session = SESSIONS.get(callback.message.chat.id, {})
+    ctx = session.get("alerta")
+    if not ctx:
+        await callback.answer("Ya no tengo el contexto, buscá de nuevo.", show_alert=True)
+        return
+    sub_ctx = dict(ctx)
+    sub_ctx["hora"] = hora
+    subscriptions.set_subscription(callback.message.chat.id, sub_ctx)
+    await callback.answer()
+    await callback.message.answer(
+        f"✅ *Suscripción guardada*\n\n"
+        f"Todos los días a las *{hora}* te voy a mandar el estado de "
+        f"*{ctx.get('nombre_ruta') or 'este paradero'}* en *{ctx.get('estacion_nombre')}*.\n\n"
+        "Usá /desuscribir para cancelar."
     )
 
 
