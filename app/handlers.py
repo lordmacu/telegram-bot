@@ -14,6 +14,7 @@ SESSIONS: dict[int, dict] = {}
 _AVISAR_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🔔 Avisar cada 5 min", callback_data="av")],
     [InlineKeyboardButton(text="📅 Suscribir diario", callback_data="sb")],
+    [InlineKeyboardButton(text="⬅️ Volver a rutas", callback_data="back_rt")],
 ])
 
 
@@ -22,6 +23,7 @@ def _horas_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=h, callback_data=f"sbt:{h}") for h in fila]
         for fila in subscriptions.HORAS_DISPONIBLES
     ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Volver", callback_data="back_av")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -40,11 +42,13 @@ def _stations_keyboard(matches: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _rutas_keyboard(rutas: list[dict]) -> InlineKeyboardMarkup:
+def _rutas_keyboard(rutas: list[dict], show_back: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text=r.get("nombre") or r.get("codigo") or "?", callback_data=f"rt:{i}")]
         for i, r in enumerate(rutas)
     ]
+    if show_back:
+        buttons.append([InlineKeyboardButton(text="⬅️ Volver a estaciones", callback_data="back_st")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -247,6 +251,85 @@ async def on_suscribir(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data == "back_st")
+async def on_back_stations(callback: CallbackQuery) -> None:
+    session = SESSIONS.get(callback.message.chat.id, {})
+    matches = session.get("stations") or []
+    if not matches:
+        await callback.answer("Ya no tengo la lista, buscá de nuevo.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer("Elegí una estación:", reply_markup=_stations_keyboard(matches))
+
+
+@router.callback_query(F.data == "back_rt")
+async def on_back_routes(callback: CallbackQuery) -> None:
+    session = SESSIONS.get(callback.message.chat.id, {})
+    rutas = session.get("rutas") or []
+    estacion = session.get("estacion")
+    if not rutas or not estacion:
+        await callback.answer("Ya no tengo el contexto, buscá de nuevo.", show_alert=True)
+        return
+    await callback.answer()
+    has_stations = bool(session.get("stations"))
+    await callback.message.answer(
+        f"🚏 *{estacion.get('nombre')}* — elegí una ruta:",
+        reply_markup=_rutas_keyboard(rutas, show_back=has_stations),
+    )
+
+
+@router.callback_query(F.data == "back_av")
+async def on_back_arrivals(callback: CallbackQuery) -> None:
+    session = SESSIONS.get(callback.message.chat.id, {})
+    ctx = session.get("alerta")
+    estacion = session.get("estacion")
+    if not ctx or not estacion:
+        await callback.answer("Ya no tengo el contexto, buscá de nuevo.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.bot.send_chat_action(callback.message.chat.id, "typing")
+    if ctx.get("es_troncal"):
+        try:
+            buses = await tm_client.get_bus_brt_time(
+                ctx["paradero"], ctx["ruta_codigo"], ctx["id_ruta"], ctx["nombre_ruta"]
+            )
+        except Exception:
+            buses = []
+        if buses:
+            await callback.message.answer(
+                formatting.format_bus_brt_times(estacion.get("nombre") or "", ctx["nombre_ruta"], buses),
+                reply_markup=_AVISAR_KB,
+            )
+            return
+        try:
+            programacion = await tm_client.get_programacion(
+                ctx["paradero"], ctx["ruta_codigo"], ctx["id_ruta"], ctx["nombre_ruta"]
+            )
+        except Exception:
+            programacion = []
+        await callback.message.answer(
+            formatting.format_programacion(estacion.get("nombre") or "", ctx["nombre_ruta"], programacion),
+            reply_markup=_AVISAR_KB,
+        )
+    else:
+        try:
+            llegadas = await tm_client.get_llegadas(ctx["paradero"])
+        except Exception:
+            await callback.message.answer("No pude consultar las llegadas, intentá de nuevo.")
+            return
+        ruta_nombre = ctx.get("nombre_ruta") or ""
+        filtradas = [
+            l for l in llegadas
+            if ruta_nombre in str(l.get("ruta_extraida") or "")
+            or ruta_nombre in str(l.get("ruta_sae") or "")
+            or str(l.get("ruta_extraida") or "") in ruta_nombre
+        ] or llegadas
+        await callback.message.answer(
+            formatting.format_llegadas(estacion.get("nombre") or "", filtradas),
+            reply_markup=_AVISAR_KB,
+        )
+
+
 @router.callback_query(F.data.startswith("sbt:"))
 async def on_hora_seleccionada(callback: CallbackQuery) -> None:
     hora = callback.data.split(":", 1)[1]
@@ -287,9 +370,10 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
             session["estacion"] = station
             session["es_troncal"] = True
             session["llegadas_cache"] = None
+            has_stations = bool(session.get("stations"))
             await message.answer(
                 f"🚏 *{station.get('nombre')}* — elegí una ruta:",
-                reply_markup=_rutas_keyboard(rutas),
+                reply_markup=_rutas_keyboard(rutas, show_back=has_stations),
             )
             return
 
@@ -339,7 +423,8 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
                 reply_markup=_AVISAR_KB,
             )
         else:
+            has_stations = bool(session.get("stations"))
             await message.answer(
                 f"🚏 *{station.get('nombre')}* — elegí una ruta:",
-                reply_markup=_rutas_keyboard(rutas),
+                reply_markup=_rutas_keyboard(rutas, show_back=has_stations),
             )
