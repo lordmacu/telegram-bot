@@ -37,6 +37,18 @@ async def search_stations(search: str | None) -> list[dict]:
     return r.json().get("listParadas") or []
 
 
+async def search_rutas(search: str, tipo_ruta: str = "") -> list[dict]:
+    """searchRutaByTipo() -> BuscarRutaListModel.lista_rutas"""
+    params = {"lServicio": "Rutas", "lTipo": "api", "lFuncion": "searchRutaByTipo", "search": search, "tipo_ruta": tipo_ruta}
+    client = await _get_client()
+    r = await client.get(f"{config.RUTAS_BASE}/loader.php", params=params, headers=_rutas_headers())
+    r.raise_for_status()
+    data = r.json()
+    rutas = data.get("lista_rutas") or []
+    log.info("search_rutas(%s) → %d rutas", search, len(rutas))
+    return rutas
+
+
 async def get_rutas_de_estacion(estacion_codigo: str, es_troncal: bool) -> list[dict]:
     """getRutasDeUnaEstacion() (troncal) / getRutasDeUnaEstacionZonal() (zonal) -> RutasListModel.lista_rutas"""
     l_funcion = "searchRutasByEstacionTroncales" if es_troncal else "findRutasByParada"

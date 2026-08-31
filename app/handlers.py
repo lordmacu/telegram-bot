@@ -52,6 +52,14 @@ def _rutas_keyboard(rutas: list[dict], show_back: bool = False) -> InlineKeyboar
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _rutas_busqueda_keyboard(rutas: list[dict]) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text=r.get("nombre") or r.get("codigo") or "?", callback_data=f"rs:{i}")]
+        for i, r in enumerate(rutas[:10])
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await message.answer(
@@ -59,6 +67,7 @@ async def cmd_start(message: Message) -> None:
         "Enviame el nombre de una estación o paradero (ej. `Portal Norte`), "
         "un código exacto con `/codigo <código>`, o compartí tu ubicación 📍 "
         "para ver los paraderos más cercanos.\n\n"
+        "/ruta B903 — buscar por número de ruta\n"
         "/cancelar — detener avisos de 5 min\n"
         "/desuscribir — cancelar suscripción diaria"
     )
@@ -92,6 +101,57 @@ async def cmd_desuscribir(message: Message) -> None:
         await message.answer("✅ Suscripción diaria cancelada.")
     else:
         await message.answer("No tenías ninguna suscripción diaria activa.")
+
+
+@router.message(Command("ruta"))
+async def cmd_ruta(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Usá: `/ruta B903` o `/ruta C25`")
+        return
+    query = parts[1].strip()
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    try:
+        rutas = await tm_client.search_rutas(query)
+    except Exception:
+        log.exception("Fallo buscando ruta %s", query)
+        await message.answer("No pude buscar esa ruta, intentá de nuevo.")
+        return
+    if not rutas:
+        await message.answer(f"No encontré ninguna ruta con *{query}*. Probá con otro código o nombre.")
+        return
+    if len(rutas) == 1:
+        ruta = rutas[0]
+        SESSIONS.setdefault(message.chat.id, {})["pending_ruta"] = ruta
+        await message.answer(
+            f"🚌 *{ruta.get('nombre')}*\n\n"
+            "Ahora decime desde qué paradero o estación vas a tomar el bus "
+            "(escribí el nombre o compartí tu ubicación 📍)."
+        )
+    else:
+        SESSIONS.setdefault(message.chat.id, {})["rutas_busqueda"] = rutas
+        await message.answer(
+            f"Encontré {len(rutas)} rutas para *{query}*, elegí una:",
+            reply_markup=_rutas_busqueda_keyboard(rutas),
+        )
+
+
+@router.callback_query(F.data.startswith("rs:"))
+async def on_ruta_busqueda_selected(callback: CallbackQuery) -> None:
+    session = SESSIONS.setdefault(callback.message.chat.id, {})
+    idx = int(callback.data.split(":", 1)[1])
+    rutas = session.get("rutas_busqueda") or []
+    if idx >= len(rutas):
+        await callback.answer("Esa opción ya expiró, buscá de nuevo.", show_alert=True)
+        return
+    ruta = rutas[idx]
+    session["pending_ruta"] = ruta
+    await callback.answer()
+    await callback.message.answer(
+        f"🚌 *{ruta.get('nombre')}*\n\n"
+        "Ahora decime desde qué paradero o estación vas a tomar el bus "
+        "(escribí el nombre o compartí tu ubicación 📍)."
+    )
 
 
 @router.message(F.location)
@@ -356,6 +416,39 @@ async def _resolve_station(message: Message, station: dict, session: dict | None
     es_troncal = stations.es_troncal(station)
 
     log.info("_resolve_station: codigo=%s nombre=%s es_troncal=%s", station.get("codigo"), station.get("nombre"), es_troncal)
+
+    # Flujo ruta-primero: si hay ruta pre-seleccionada, ir directo a llegadas
+    pending_ruta = session.pop("pending_ruta", None)
+    if pending_ruta:
+        ruta_nombre = pending_ruta.get("nombre") or pending_ruta.get("codigo") or ""
+        session["alerta"] = {
+            "paradero": station.get("codigo"),
+            "estacion_nombre": station.get("nombre") or "",
+            "ruta_codigo": pending_ruta.get("codigo") or "",
+            "id_ruta": pending_ruta.get("id") or "",
+            "nombre_ruta": ruta_nombre,
+            "es_troncal": es_troncal,
+        }
+        try:
+            llegadas = await tm_client.get_llegadas(station.get("codigo"))
+        except Exception:
+            llegadas = []
+        filtradas = [
+            l for l in llegadas
+            if ruta_nombre in str(l.get("ruta_extraida") or "")
+            or ruta_nombre in str(l.get("ruta_sae") or "")
+            or str(l.get("ruta_extraida") or "") in ruta_nombre
+        ] if ruta_nombre else llegadas
+        if not filtradas:
+            filtradas = llegadas  # mostrar todas si no hay coincidencia exacta
+        if filtradas:
+            await message.answer(
+                formatting.format_llegadas(station.get("nombre") or "", filtradas),
+                reply_markup=_AVISAR_KB,
+            )
+        else:
+            await message.answer(f"No hay buses de *{ruta_nombre}* en *{station.get('nombre')}* en este momento.")
+        return
 
     if es_troncal:
         try:
