@@ -24,8 +24,10 @@ async def get_stations(search: str = Query(default="")):
 
 
 @app.get("/api/stations/nearest")
-async def get_nearest(lat: float, lon: float, limit: int = 8):
+async def get_nearest(lat: float, lon: float, limit: int = 8, radius_m: float = 0):
     all_st = await stations_mod.get_all_stations()
+    if radius_m > 0:
+        return stations_mod.nearest_within_radius(all_st, lat, lon, radius_m)
     return stations_mod.nearest_stations(all_st, lat, lon, top_n=limit)
 
 

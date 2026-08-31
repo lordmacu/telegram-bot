@@ -83,3 +83,23 @@ def nearest_stations(stations_list: list[dict], lat: float, lon: float, top_n: i
         s2["_distancia_m"] = round(dist)
         result.append(s2)
     return result
+
+
+def nearest_within_radius(
+    stations_list: list[dict], lat: float, lon: float, radius_m: float, max_results: int = 200
+) -> list[dict]:
+    scored = []
+    for s in stations_list:
+        coords = _parse_coordenada(s.get("coordenada") or "")
+        if not coords:
+            continue
+        dist = _haversine_m(lat, lon, coords[0], coords[1])
+        if dist <= radius_m:
+            scored.append((dist, s))
+    scored.sort(key=lambda t: t[0])
+    result = []
+    for dist, s in scored[:max_results]:
+        s2 = dict(s)
+        s2["_distancia_m"] = round(dist)
+        result.append(s2)
+    return result
