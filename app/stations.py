@@ -103,3 +103,22 @@ def nearest_within_radius(
         s2["_distancia_m"] = round(dist)
         result.append(s2)
     return result
+
+
+def stations_within_bounds(
+    stations_list: list[dict],
+    lat_min: float, lat_max: float,
+    lon_min: float, lon_max: float,
+    max_results: int = 400,
+) -> list[dict]:
+    result = []
+    for s in stations_list:
+        coords = _parse_coordenada(s.get("coordenada") or "")
+        if not coords:
+            continue
+        lat, lon = coords
+        if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+            result.append(s)
+            if len(result) >= max_results:
+                break
+    return result

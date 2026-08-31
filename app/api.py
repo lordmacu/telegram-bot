@@ -31,6 +31,14 @@ async def get_nearest(lat: float, lon: float, limit: int = 8, radius_m: float = 
     return stations_mod.nearest_stations(all_st, lat, lon, top_n=limit)
 
 
+@app.get("/api/stations/bounds")
+async def get_stations_bounds(
+    lat_min: float, lat_max: float, lon_min: float, lon_max: float
+):
+    all_st = await stations_mod.get_all_stations()
+    return stations_mod.stations_within_bounds(all_st, lat_min, lat_max, lon_min, lon_max)
+
+
 @app.get("/api/llegadas/{codigo}")
 async def get_llegadas(codigo: str):
     try:
