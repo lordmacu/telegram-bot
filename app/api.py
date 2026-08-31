@@ -43,8 +43,9 @@ async def get_stations_bounds(
 async def get_llegadas(codigo: str):
     try:
         return await tm_client.get_llegadas(codigo)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        # Timeout o error de la Bodega → devolver lista vacía (no hay buses)
+        return []
 
 
 @app.get("/api/rutas/{codigo}")

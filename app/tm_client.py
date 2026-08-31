@@ -70,6 +70,7 @@ async def get_llegadas(paradero_codigo: str) -> list[dict]:
         f"{config.BODEGA_BASE}/paradero/buses",
         json={"paradero": paradero_codigo},
         headers=_bodega_headers(),
+        timeout=8.0,  # dato en tiempo real: si no responde rápido, no hay buses
     )
     r.raise_for_status()
     data = r.json() or []
