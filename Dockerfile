@@ -10,4 +10,6 @@ COPY app ./app
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]
 
+EXPOSE 8080
+
 CMD ["python", "-m", "app.main"]
